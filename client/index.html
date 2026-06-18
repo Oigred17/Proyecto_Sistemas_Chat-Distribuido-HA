@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -18,7 +19,7 @@
       --border: #1e2d45;
       --accent: #3b82f6;
       --accent-light: #60a5fa;
-      --accent-glow: rgba(59,130,246,0.15);
+      --accent-glow: rgba(59, 130, 246, 0.15);
       --success: #10b981;
       --warning: #f59e0b;
       --danger: #ef4444;
@@ -27,12 +28,16 @@
       --text-muted: #4b6080;
       --msg-own-bg: linear-gradient(135deg, #1d4ed8, #3b82f6);
       --msg-other-bg: #1a2235;
-      --shadow-lg: 0 20px 60px rgba(0,0,0,0.6);
+      --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.6);
       --radius: 0.75rem;
       --radius-sm: 0.4rem;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
     body {
       font-family: 'Inter', system-ui, sans-serif;
@@ -43,8 +48,8 @@
       align-items: center;
       min-height: 100vh;
       background-image:
-        radial-gradient(ellipse 80% 50% at 20% 10%, rgba(59,130,246,0.08) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 40% at 80% 90%, rgba(99,102,241,0.06) 0%, transparent 60%);
+        radial-gradient(ellipse 80% 50% at 20% 10%, rgba(59, 130, 246, 0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 90%, rgba(99, 102, 241, 0.06) 0%, transparent 60%);
     }
 
     /* ── LOGIN ─────────────────────────────────────── */
@@ -65,9 +70,10 @@
     }
 
     #loginView .logo-icon {
-      width: 56px; height: 56px;
+      width: 56px;
+      height: 56px;
       background: var(--accent-glow);
-      border: 1px solid rgba(59,130,246,0.3);
+      border: 1px solid rgba(59, 130, 246, 0.3);
       border-radius: 1rem;
       display: inline-flex;
       align-items: center;
@@ -132,12 +138,22 @@
       font-family: inherit;
       cursor: pointer;
       transition: opacity .2s, transform .1s;
-      box-shadow: 0 4px 15px rgba(59,130,246,0.3);
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
     }
 
-    .btn-primary:hover { opacity: 0.9; }
-    .btn-primary:active { transform: scale(0.98); }
-    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-primary:hover {
+      opacity: 0.9;
+    }
+
+    .btn-primary:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
 
     /* ── CHAT LAYOUT ───────────────────────────────── */
     #chatView {
@@ -171,9 +187,10 @@
     }
 
     .chat-header .brand-icon {
-      width: 36px; height: 36px;
+      width: 36px;
+      height: 36px;
       background: var(--accent-glow);
-      border: 1px solid rgba(59,130,246,0.25);
+      border: 1px solid rgba(59, 130, 246, 0.25);
       border-radius: 0.5rem;
       display: flex;
       align-items: center;
@@ -205,14 +222,26 @@
     }
 
     .status-dot {
-      width: 7px; height: 7px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--text-muted);
       transition: background .3s;
     }
-    .status-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
-    .status-dot.reconnecting { background: var(--warning); animation: pulse 1s infinite; }
-    .status-dot.offline { background: var(--danger); }
+
+    .status-dot.online {
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+
+    .status-dot.reconnecting {
+      background: var(--warning);
+      animation: pulse 1s infinite;
+    }
+
+    .status-dot.offline {
+      background: var(--danger);
+    }
 
     /* Pod info bar */
     #podBar {
@@ -267,12 +296,17 @@
       transition: background .15s;
     }
 
-    .users-panel .user-item:hover { background: var(--bg-hover); }
+    .users-panel .user-item:hover {
+      background: var(--bg-hover);
+    }
 
     .user-avatar {
-      width: 26px; height: 26px;
+      width: 26px;
+      height: 26px;
       border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 0.7rem;
       font-weight: 700;
       flex-shrink: 0;
@@ -298,9 +332,18 @@
       gap: 0.5rem;
     }
 
-    #mensajes::-webkit-scrollbar { width: 5px; }
-    #mensajes::-webkit-scrollbar-track { background: transparent; }
-    #mensajes::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    #mensajes::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    #mensajes::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    #mensajes::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
 
     /* Burbuja de mensaje */
     .msg {
@@ -310,9 +353,18 @@
       animation: msgIn .2s ease;
     }
 
-    .msg.propio { align-self: flex-end; }
-    .msg.otro { align-self: flex-start; }
-    .msg.sistema { align-self: center; max-width: 100%; }
+    .msg.propio {
+      align-self: flex-end;
+    }
+
+    .msg.otro {
+      align-self: flex-start;
+    }
+
+    .msg.sistema {
+      align-self: center;
+      max-width: 100%;
+    }
 
     .msg-bubble {
       padding: 0.55rem 0.85rem;
@@ -349,7 +401,9 @@
       padding: 0 0.2rem;
     }
 
-    .msg.propio .msg-meta { text-align: right; }
+    .msg.propio .msg-meta {
+      text-align: right;
+    }
 
     .msg-name {
       font-size: 0.73rem;
@@ -400,41 +454,78 @@
       cursor: pointer;
       font-weight: 600;
       transition: opacity .2s, transform .1s;
-      box-shadow: 0 3px 10px rgba(59,130,246,0.25);
+      box-shadow: 0 3px 10px rgba(59, 130, 246, 0.25);
     }
-    .btn-send:hover { opacity: 0.9; }
-    .btn-send:active { transform: scale(0.97); }
-    .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-send:hover {
+      opacity: 0.9;
+    }
+
+    .btn-send:active {
+      transform: scale(0.97);
+    }
+
+    .btn-send:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
 
     /* ── ANIMATIONS ─────────────────────────────────── */
     @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to   { opacity: 1; transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     @keyframes msgIn {
-      from { opacity: 0; transform: translateY(6px); }
-      to   { opacity: 1; transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.4;
+      }
     }
 
     /* Responsive */
     @media (max-width: 600px) {
-      .users-panel { display: none; }
-      #chatView { padding: 0.5rem; }
+      .users-panel {
+        display: none;
+      }
+
+      #chatView {
+        padding: 0.5rem;
+      }
     }
   </style>
 </head>
+
 <body>
 
   <!-- ════════ LOGIN ════════ -->
   <div id="loginView">
     <div class="logo">
-      <div class="logo-icon">💬</div>
+      <div class="logo-icon"></div>
       <h1>Chat Distribuido HA</h1>
       <p>Sistemas Distribuidos y Alta Disponibilidad</p>
     </div>
@@ -451,7 +542,7 @@
     <!-- Header -->
     <header class="chat-header">
       <div class="brand">
-        <div class="brand-icon">💬</div>
+        <div class="brand-icon"></div>
         <h1>Chat Distribuido HA</h1>
       </div>
       <div class="meta">
@@ -468,7 +559,7 @@
 
     <!-- Pod info bar -->
     <div id="podBar">
-      <span id="podInfo">🔌 Conectando al servidor...</span>
+      <span id="podInfo"> Conectando al servidor...</span>
       <span id="podTimestamp"></span>
     </div>
 
@@ -485,7 +576,8 @@
       <div class="messages-area">
         <div id="mensajes"></div>
         <div class="chat-input-area">
-          <input type="text" id="mensajeInput" placeholder="Escribe un mensaje y presiona Enter..." disabled autocomplete="off">
+          <input type="text" id="mensajeInput" placeholder="Escribe un mensaje y presiona Enter..." disabled
+            autocomplete="off">
           <button class="btn-send" id="btnEnviar" disabled>➤</button>
         </div>
       </div>
@@ -508,24 +600,24 @@
     });
 
     // ── Elementos DOM ─────────────────────────────────
-    const loginView       = document.getElementById('loginView');
-    const chatView        = document.getElementById('chatView');
-    const nombreInput     = document.getElementById('nombreInput');
-    const btnEntrar       = document.getElementById('btnEntrar');
-    const mensajesDiv     = document.getElementById('mensajes');
-    const mensajeInput    = document.getElementById('mensajeInput');
-    const btnEnviar       = document.getElementById('btnEnviar');
-    const usuariosSpan    = document.getElementById('usuariosConectados');
-    const listaUsuarios   = document.getElementById('listaUsuarios');
-    const statusDot       = document.getElementById('statusDot');
-    const statusText      = document.getElementById('statusText');
-    const podInfo         = document.getElementById('podInfo');
-    const podTimestamp    = document.getElementById('podTimestamp');
+    const loginView = document.getElementById('loginView');
+    const chatView = document.getElementById('chatView');
+    const nombreInput = document.getElementById('nombreInput');
+    const btnEntrar = document.getElementById('btnEntrar');
+    const mensajesDiv = document.getElementById('mensajes');
+    const mensajeInput = document.getElementById('mensajeInput');
+    const btnEnviar = document.getElementById('btnEnviar');
+    const usuariosSpan = document.getElementById('usuariosConectados');
+    const listaUsuarios = document.getElementById('listaUsuarios');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const podInfo = document.getElementById('podInfo');
+    const podTimestamp = document.getElementById('podTimestamp');
 
     // ── Colores para avatares ─────────────────────────
     const AVATAR_COLORS = [
-      '#3b82f6','#8b5cf6','#10b981','#f59e0b',
-      '#ef4444','#ec4899','#06b6d4','#84cc16'
+      '#3b82f6', '#8b5cf6', '#10b981', '#f59e0b',
+      '#ef4444', '#ec4899', '#06b6d4', '#84cc16'
     ];
     const colorMap = new Map();
     let colorIdx = 0;
@@ -541,9 +633,9 @@
     // ── Estado de conexión ────────────────────────────
     function setStatus(state) {
       statusDot.className = 'status-dot ' + state;
-      if (state === 'online')       statusText.textContent = 'Conectado';
+      if (state === 'online') statusText.textContent = 'Conectado';
       if (state === 'reconnecting') statusText.textContent = 'Reconectando...';
-      if (state === 'offline')      statusText.textContent = 'Sin conexión';
+      if (state === 'offline') statusText.textContent = 'Sin conexión';
 
       // Habilitar/deshabilitar input según estado
       const canSend = state === 'online' && conectado;
@@ -556,11 +648,11 @@
       fetch('/health')
         .then(r => r.json())
         .then(d => {
-          podInfo.textContent = `🖥️ Servidor: ${d.pod}  |  Usuarios: ${d.usuarios}`;
+          podInfo.textContent = ` Servidor: ${d.pod}  |  Usuarios: ${d.usuarios}`;
           podTimestamp.textContent = new Date(d.timestamp).toLocaleTimeString('es-MX');
         })
         .catch(() => {
-          podInfo.textContent = '🔌 Sin conexión al servidor';
+          podInfo.textContent = ' Sin conexión al servidor';
         });
     }
 
@@ -682,4 +774,5 @@
     setStatus('reconnecting');
   </script>
 </body>
+
 </html>
