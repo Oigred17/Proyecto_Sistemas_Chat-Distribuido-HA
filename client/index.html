@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat Distribuido HA — Sistemas Distribuidos</title>
+  <meta name="description" content="Sistema de chat distribuido con alta disponibilidad usando WebSockets y MicroShift">
+  <!-- Socket.io del mismo servidor (no CDN externo) para funcionar sin internet -->
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    :root {
+      --bg-base: #0a0f1e;
+      --bg-card: #111827;
+      --bg-hover: #1a2235;
+      --bg-input: #0d1526;
+      --border: #1e2d45;
+      --accent: #3b82f6;
+      --accent-light: #60a5fa;
+      --accent-glow: rgba(59,130,246,0.15);
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #4b6080;
+      --msg-own-bg: linear-gradient(135deg, #1d4ed8, #3b82f6);
+      --msg-other-bg: #1a2235;
+      --shadow-lg: 0 20px 60px rgba(0,0,0,0.6);
+      --radius: 0.75rem;
+      --radius-sm: 0.4rem;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 20% 10%, rgba(59,130,246,0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 90%, rgba(99,102,241,0.06) 0%, transparent 60%);
+    }
+
+    /* ── LOGIN ─────────────────────────────────────── */
+    #loginView {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: var(--shadow-lg);
+      animation: fadeIn .4s ease;
+    }
+
+    #loginView .logo {
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+
+    #loginView .logo-icon {
+      width: 56px; height: 56px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(59,130,246,0.3);
+      border-radius: 1rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.6rem;
+      margin-bottom: 0.75rem;
+    }
+
+    #loginView h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 0.25rem;
+    }
+
+    #loginView p {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    .form-group {
+      margin-bottom: 1rem;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 0.4rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+
+    .form-group input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .btn-primary {
+      width: 100%;
+      padding: 0.8rem;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+      box-shadow: 0 4px 15px rgba(59,130,246,0.3);
+    }
+
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:active { transform: scale(0.98); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    /* ── CHAT LAYOUT ───────────────────────────────── */
+    #chatView {
+      display: none;
+      width: 100%;
+      max-width: 860px;
+      height: 100vh;
+      max-height: 100vh;
+      padding: 1rem;
+      flex-direction: column;
+      gap: 0.75rem;
+      animation: fadeIn .35s ease;
+    }
+
+    /* Header del chat */
+    .chat-header {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .chat-header .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .chat-header .brand-icon {
+      width: 36px; height: 36px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(59,130,246,0.25);
+      border-radius: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+    }
+
+    .chat-header h1 {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .chat-header .meta {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      background: var(--bg-input);
+      padding: 0.3rem 0.7rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+    }
+
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background .3s;
+    }
+    .status-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .status-dot.reconnecting { background: var(--warning); animation: pulse 1s infinite; }
+    .status-dot.offline { background: var(--danger); }
+
+    /* Pod info bar */
+    #podBar {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0.35rem 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    /* Área de usuarios y mensajes */
+    .chat-body {
+      flex: 1;
+      display: flex;
+      gap: 0.75rem;
+      min-height: 0;
+    }
+
+    /* Panel de usuarios */
+    .users-panel {
+      width: 180px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem;
+      flex-shrink: 0;
+      overflow-y: auto;
+    }
+
+    .users-panel h3 {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.6rem;
+    }
+
+    .users-panel .user-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.5rem;
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      transition: background .15s;
+    }
+
+    .users-panel .user-item:hover { background: var(--bg-hover); }
+
+    .user-avatar {
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    /* Área de mensajes */
+    .messages-area {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    #mensajes {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    #mensajes::-webkit-scrollbar { width: 5px; }
+    #mensajes::-webkit-scrollbar-track { background: transparent; }
+    #mensajes::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* Burbuja de mensaje */
+    .msg {
+      display: flex;
+      flex-direction: column;
+      max-width: 70%;
+      animation: msgIn .2s ease;
+    }
+
+    .msg.propio { align-self: flex-end; }
+    .msg.otro { align-self: flex-start; }
+    .msg.sistema { align-self: center; max-width: 100%; }
+
+    .msg-bubble {
+      padding: 0.55rem 0.85rem;
+      border-radius: var(--radius);
+      font-size: 0.9rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .msg.propio .msg-bubble {
+      background: var(--msg-own-bg);
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.otro .msg-bubble {
+      background: var(--msg-other-bg);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg.sistema .msg-bubble {
+      background: transparent;
+      color: var(--text-muted);
+      font-style: italic;
+      font-size: 0.78rem;
+      text-align: center;
+      padding: 0.2rem 0.5rem;
+    }
+
+    .msg-meta {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      margin-top: 0.2rem;
+      padding: 0 0.2rem;
+    }
+
+    .msg.propio .msg-meta { text-align: right; }
+
+    .msg-name {
+      font-size: 0.73rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 0.15rem;
+      padding: 0 0.2rem;
+    }
+
+    /* Input area */
+    .chat-input-area {
+      padding: 0.75rem 1rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .chat-input-area input {
+      flex: 1;
+      padding: 0.65rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+
+    .chat-input-area input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .chat-input-area input:disabled {
+      opacity: 0.4;
+    }
+
+    .btn-send {
+      padding: 0.65rem 1.1rem;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+      color: #fff;
+      font-size: 0.9rem;
+      font-family: inherit;
+      cursor: pointer;
+      font-weight: 600;
+      transition: opacity .2s, transform .1s;
+      box-shadow: 0 3px 10px rgba(59,130,246,0.25);
+    }
+    .btn-send:hover { opacity: 0.9; }
+    .btn-send:active { transform: scale(0.97); }
+    .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── ANIMATIONS ─────────────────────────────────── */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      .users-panel { display: none; }
+      #chatView { padding: 0.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ════════ LOGIN ════════ -->
+  <div id="loginView">
+    <div class="logo">
+      <div class="logo-icon">💬</div>
+      <h1>Chat Distribuido HA</h1>
+      <p>Sistemas Distribuidos y Alta Disponibilidad</p>
+    </div>
+    <div class="form-group">
+      <label for="nombreInput">Tu nombre de usuario</label>
+      <input type="text" id="nombreInput" placeholder="ej. Alumno01" maxlength="20" autofocus autocomplete="off">
+    </div>
+    <button class="btn-primary" id="btnEntrar">Entrar al Chat</button>
+  </div>
+
+  <!-- ════════ CHAT ════════ -->
+  <div id="chatView">
+
+    <!-- Header -->
+    <header class="chat-header">
+      <div class="brand">
+        <div class="brand-icon">💬</div>
+        <h1>Chat Distribuido HA</h1>
+      </div>
+      <div class="meta">
+        <div class="status-badge" id="statusBadge">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="statusText">Conectando...</span>
+        </div>
+        <div class="status-badge" id="userCount">
+          <span>👥</span>
+          <span id="usuariosConectados">0</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Pod info bar -->
+    <div id="podBar">
+      <span id="podInfo">🔌 Conectando al servidor...</span>
+      <span id="podTimestamp"></span>
+    </div>
+
+    <!-- Body: users + messages -->
+    <div class="chat-body">
+
+      <!-- Panel de usuarios -->
+      <aside class="users-panel">
+        <h3>En línea</h3>
+        <div id="listaUsuarios"></div>
+      </aside>
+
+      <!-- Mensajes + input -->
+      <div class="messages-area">
+        <div id="mensajes"></div>
+        <div class="chat-input-area">
+          <input type="text" id="mensajeInput" placeholder="Escribe un mensaje y presiona Enter..." disabled autocomplete="off">
+          <button class="btn-send" id="btnEnviar" disabled>➤</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // ── Estado global ──────────────────────────────────
+    let nombre = '';
+    let conectado = false;
+
+    // ── Socket.io con reconexión automática ───────────
+    const socket = io({
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 10000
+    });
+
+    // ── Elementos DOM ─────────────────────────────────
+    const loginView       = document.getElementById('loginView');
+    const chatView        = document.getElementById('chatView');
+    const nombreInput     = document.getElementById('nombreInput');
+    const btnEntrar       = document.getElementById('btnEntrar');
+    const mensajesDiv     = document.getElementById('mensajes');
+    const mensajeInput    = document.getElementById('mensajeInput');
+    const btnEnviar       = document.getElementById('btnEnviar');
+    const usuariosSpan    = document.getElementById('usuariosConectados');
+    const listaUsuarios   = document.getElementById('listaUsuarios');
+    const statusDot       = document.getElementById('statusDot');
+    const statusText      = document.getElementById('statusText');
+    const podInfo         = document.getElementById('podInfo');
+    const podTimestamp    = document.getElementById('podTimestamp');
+
+    // ── Colores para avatares ─────────────────────────
+    const AVATAR_COLORS = [
+      '#3b82f6','#8b5cf6','#10b981','#f59e0b',
+      '#ef4444','#ec4899','#06b6d4','#84cc16'
+    ];
+    const colorMap = new Map();
+    let colorIdx = 0;
+
+    function getColor(name) {
+      if (!colorMap.has(name)) {
+        colorMap.set(name, AVATAR_COLORS[colorIdx % AVATAR_COLORS.length]);
+        colorIdx++;
+      }
+      return colorMap.get(name);
+    }
+
+    // ── Estado de conexión ────────────────────────────
+    function setStatus(state) {
+      statusDot.className = 'status-dot ' + state;
+      if (state === 'online')       statusText.textContent = 'Conectado';
+      if (state === 'reconnecting') statusText.textContent = 'Reconectando...';
+      if (state === 'offline')      statusText.textContent = 'Sin conexión';
+
+      // Habilitar/deshabilitar input según estado
+      const canSend = state === 'online' && conectado;
+      mensajeInput.disabled = !canSend;
+      btnEnviar.disabled = !canSend;
+    }
+
+    // ── Actualizar info del Pod ────────────────────────
+    function fetchPodInfo() {
+      fetch('/health')
+        .then(r => r.json())
+        .then(d => {
+          podInfo.textContent = `🖥️ Servidor: ${d.pod}  |  Usuarios: ${d.usuarios}`;
+          podTimestamp.textContent = new Date(d.timestamp).toLocaleTimeString('es-MX');
+        })
+        .catch(() => {
+          podInfo.textContent = '🔌 Sin conexión al servidor';
+        });
+    }
+
+    // Refrescar info del pod cada 5 segundos
+    setInterval(fetchPodInfo, 5000);
+
+    // ── Login ─────────────────────────────────────────
+    function entrar() {
+      const n = nombreInput.value.trim();
+      if (!n) { nombreInput.focus(); return; }
+      nombre = n;
+      socket.emit('registrar', nombre);
+      loginView.style.display = 'none';
+      chatView.style.display = 'flex';
+      conectado = true;
+      setStatus('online');
+      mensajeInput.focus();
+      fetchPodInfo();
+    }
+
+    btnEntrar.addEventListener('click', entrar);
+    nombreInput.addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+
+    // ── Envío de mensaje ──────────────────────────────
+    function enviarMensaje() {
+      const t = mensajeInput.value.trim();
+      if (!t || !conectado) return;
+      socket.emit('mensaje', t);
+      mensajeInput.value = '';
+    }
+
+    btnEnviar.addEventListener('click', enviarMensaje);
+    mensajeInput.addEventListener('keydown', e => { if (e.key === 'Enter') enviarMensaje(); });
+
+    // ── Agregar mensaje a la UI ───────────────────────
+    function agregarMensaje(msg) {
+      const esPropio = msg.nombre === nombre;
+      const div = document.createElement('div');
+      div.className = 'msg ' + (esPropio ? 'propio' : 'otro');
+
+      if (!esPropio) {
+        const nameEl = document.createElement('div');
+        nameEl.className = 'msg-name';
+        nameEl.style.color = getColor(msg.nombre);
+        nameEl.textContent = msg.nombre;
+        div.appendChild(nameEl);
+      }
+
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.textContent = msg.texto;
+      div.appendChild(bubble);
+
+      const meta = document.createElement('div');
+      meta.className = 'msg-meta';
+      meta.textContent = msg.hora;
+      div.appendChild(meta);
+
+      mensajesDiv.appendChild(div);
+      mensajesDiv.scrollTop = mensajesDiv.scrollHeight;
+    }
+
+    function agregarSistema(texto) {
+      const div = document.createElement('div');
+      div.className = 'msg sistema';
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.textContent = `— ${texto} —`;
+      div.appendChild(bubble);
+      mensajesDiv.appendChild(div);
+      mensajesDiv.scrollTop = mensajesDiv.scrollHeight;
+    }
+
+    // ── Actualizar lista de usuarios ──────────────────
+    function actualizarUsuarios(lista) {
+      usuariosSpan.textContent = lista.length;
+      listaUsuarios.innerHTML = '';
+      lista.forEach(u => {
+        const item = document.createElement('div');
+        item.className = 'user-item';
+        const av = document.createElement('div');
+        av.className = 'user-avatar';
+        av.style.background = getColor(u) + '22';
+        av.style.color = getColor(u);
+        av.textContent = u.charAt(0).toUpperCase();
+        const nm = document.createElement('span');
+        nm.textContent = u === nombre ? `${u} (tú)` : u;
+        item.appendChild(av);
+        item.appendChild(nm);
+        listaUsuarios.appendChild(item);
+      });
+    }
+
+    // ── Eventos de Socket.io ──────────────────────────
+    socket.on('connect', () => {
+      setStatus('online');
+      // Re-registrarse si ya teníamos nombre (tras reconexión)
+      if (nombre) socket.emit('registrar', nombre);
+    });
+
+    socket.on('disconnect', () => {
+      setStatus('offline');
+    });
+
+    socket.on('reconnecting', () => {
+      setStatus('reconnecting');
+    });
+
+    socket.on('mensaje', agregarMensaje);
+
+    socket.on('mensaje-sistema', texto => {
+      agregarSistema(texto);
+      fetchPodInfo(); // Refrescar info del pod al cambiar usuarios
+    });
+
+    socket.on('usuarios-activos', actualizarUsuarios);
+
+    // Estado inicial
+    setStatus('reconnecting');
+  </script>
+</body>
+</html>
