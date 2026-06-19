@@ -1,24 +1,49 @@
-# OpenShift Clients
+# Chat Distribuido HA
 
-The OpenShift client `oc` simplifies working with Kubernetes and OpenShift
-clusters, offering a number of advantages over `kubectl` such as easy login,
-kube config file management, and access to developer tools. The `kubectl`
-binary is included alongside for when strict Kubernetes compliance is necessary.
+Sistema de chat distribuido con alta disponibilidad, desplegado en MicroShift (Kubernetes).
 
-To learn more about OpenShift, visit [docs.openshift.com](https://docs.openshift.com)
-and select the version of OpenShift you are using.
+## Arquitectura (3 Nodos)
 
-## Installing the tools
+| Nodo | Componente | Tecnología |
+|------|-----------|------------|
+| 1 | Cliente Terminal | HTML5 / JS / Socket.io |
+| 2 | Servidor Réplica Principal | Node.js + Express + Socket.io |
+| 3 | Servidor Redundancia | Node.js + Express + Socket.io |
 
-After extracting this archive, move the `oc` and `kubectl` binaries
-to a location on your PATH such as `/usr/local/bin`. Then run:
+## Estructura del Proyecto
 
-    oc login [API_URL]
+```
+Proyecto_Sistemas/
+├── client/index.html       # Cliente web
+├── server/
+│   ├── server.js           # Servidor backend
+│   ├── package.json        # Dependencias
+│   └── Dockerfile          # Imagen de contenedor
+├── k8s/deployment.yaml     # Manifiestos Kubernetes
+├── docs/
+│   ├── instalacion.md      # Guía de instalación
+│   ├── manual-despliegue.md # Manual de despliegue
+│   └── diagramas.md        # Diagramas de arquitectura
+├── deploy.sh               # Script de despliegue automatizado
+└── README.md               # Este archivo
+```
 
-to start a session against an OpenShift cluster. After login, run `oc` and
-`oc help` to learn more about how to get started with OpenShift.
+## Despliegue Rápido
 
-## License
+```bash
+./deploy.sh
+```
 
-OpenShift is licensed under the Apache Public License 2.0. The source code for this
-program is [located on github](https://github.com/openshift/origin).
+## Prueba de Tolerancia a Fallos
+
+```bash
+oc get pods -n chat-ha -l app=chat-distribuido -o wide
+oc delete pod -n chat-ha chat-distribuido-0   # mientras se envían mensajes
+oc get pods -n chat-ha -l app=chat-distribuido -w  # ver recreación automática
+```
+
+## Documentación
+
+- `docs/instalacion.md` — Instalación completa del entorno
+- `docs/manual-despliegue.md` — Manual de despliegue detallado
+- `docs/diagramas.md` — Diagramas de componentes y secuencia

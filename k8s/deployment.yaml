@@ -4,7 +4,8 @@
 #
 #  Recursos definidos:
 #    1. Namespace        — Aislamiento del proyecto
-#    2. Deployment       — 2 réplicas del servidor de chat
+#    2. StatefulSet      — 2 pods con nombres estables (chat-distribuido-0, chat-distribuido-1)
+#                         → Nodo 2 (Réplica Principal), Nodo 3 (Redundancia)
 #    3. Service          — Balanceo de carga interno
 #    4. Route (opcional) — Exposición externa en MicroShift/OpenShift
 # ═══════════════════════════════════════════════════════════════
@@ -20,9 +21,12 @@ metadata:
     app.kubernetes.io/part-of: sistemas-distribuidos
 
 ---
-# ── 2. DEPLOYMENT ─────────────────────────────────────────────
+# ── 2. STATEFULSET ─────────────────────────────────────────────
+# StatefulSet da nombres estables y ordinales a los pods:
+#   chat-distribuido-0  → Nodo 2 (Réplica Principal)
+#   chat-distribuido-1  → Nodo 3 (Redundancia)
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: chat-distribuido
   namespace: chat-ha
@@ -30,7 +34,7 @@ metadata:
     app: chat-distribuido
     version: "1.0"
 spec:
-  # 2 réplicas = Alta Disponibilidad básica
+  serviceName: chat-distribuido-svc
   replicas: 2
 
   selector:
@@ -38,11 +42,10 @@ spec:
       app: chat-distribuido
 
   # Estrategia de actualización sin downtime
-  strategy:
+  updateStrategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0   # Siempre hay al menos 1 pod disponible
-      maxSurge: 1         # Permite 1 pod extra durante la actualización
+      partition: 0
 
   template:
     metadata:
@@ -66,16 +69,8 @@ spec:
 
       containers:
       - name: chat-server
-        # Imagen construida desde la raíz del proyecto:
-        #   podman build -t chat-distribuido:latest -f server/Dockerfile .
-        #
-        # Para MicroShift con registro interno (sin acceso a internet):
-        #   image: image-registry.openshift-image-registry.svc:5000/chat-ha/chat-distribuido:latest
-        #
-        # Para desarrollo local con Podman (sin registro):
-        #   Usar imagePullPolicy: Never y cargar la imagen en el daemon de MicroShift
         image: localhost/chat-distribuido:latest
-        imagePullPolicy: IfNotPresent  # No intenta descargar si ya existe localmente
+        imagePullPolicy: IfNotPresent
 
         ports:
         - name: http
@@ -94,10 +89,13 @@ spec:
         - name: HOSTNAME
           valueFrom:
             fieldRef:
-              fieldPath: metadata.name   # El nombre del Pod como hostname
+              fieldPath: metadata.name
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
 
         # ── Probes de Kubernetes ──────────────────────
-        # Liveness: reinicia el pod si el servidor no responde
         livenessProbe:
           httpGet:
             path: /health
@@ -107,7 +105,6 @@ spec:
           failureThreshold: 3
           timeoutSeconds: 5
 
-        # Readiness: solo envía tráfico si el pod está listo
         readinessProbe:
           httpGet:
             path: /health
@@ -117,7 +114,6 @@ spec:
           failureThreshold: 2
           timeoutSeconds: 3
 
-        # Startup: da más tiempo en el arranque inicial
         startupProbe:
           httpGet:
             path: /health
@@ -129,10 +125,10 @@ spec:
         # ── Límites de recursos ───────────────────────
         resources:
           requests:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "50m"
           limits:
-            memory: "128Mi"
+            memory: "256Mi"
             cpu: "200m"
 
 ---
@@ -145,17 +141,15 @@ metadata:
   labels:
     app: chat-distribuido
 spec:
-  # NodePort: accesible desde fuera del clúster por un puerto fijo
-  # Cambiar a LoadBalancer si el entorno lo soporta
   type: NodePort
   selector:
     app: chat-distribuido
   ports:
   - name: http
     protocol: TCP
-    port: 80           # Puerto del Service
-    targetPort: 3000   # Puerto del contenedor
-    nodePort: 30080    # Puerto expuesto en el nodo (30000-32767)
+    port: 80
+    targetPort: 3000
+    nodePort: 30080
 
 ---
 # ── 4. ROUTE (OpenShift/MicroShift) ──────────────────────────

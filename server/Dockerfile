@@ -6,7 +6,8 @@ LABEL description="Chat Distribuido con Alta Disponibilidad vía WebSockets"
 
 WORKDIR /app
 
-# 1. Instalar dependencias (capa cacheada si no cambia package.json)
+# 1. Instalar herramientas útiles y dependencias (capa cacheada si no cambia package.json)
+RUN apk add --no-cache curl
 COPY server/package.json .
 RUN npm install --omit=dev && npm cache clean --force
 
@@ -24,8 +25,9 @@ ENV CLIENT_DIR=/app/client
 
 EXPOSE 3000
 
-# Healthcheck nativo de Docker
+# Healthcheck nativo de Docker (usar 127.0.0.1, no localhost,
+# porque wget en alpine puede fallar resolviendo localhost a IPv6)
 HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost:3000/health || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/health || exit 1
 
 CMD ["node", "server.js"]

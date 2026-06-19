@@ -1,0 +1,6 @@
+minc
+oc.tar.gz
+*.pdf
+server/node_modules/
+server/crc-linux-2.61.0-amd64/
+server/crc-linux-amd64.tar.xz

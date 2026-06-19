@@ -6,7 +6,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  // Permite reconexiones correctamente
+  transports: ['websocket'],
   pingTimeout: 30000,
   pingInterval: 10000
 });
@@ -14,6 +14,14 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const POD_NAME = process.env.HOSTNAME || 'localhost';
+const POD_UID = process.env.POD_UID || 'unknown';
+const POD_ID = (POD_UID && POD_UID !== 'unknown') ? POD_UID.substring(0, 8) : POD_NAME.split('-').pop();
+
+const NOMBRES_NODOS = {
+  'chat-distribuido-0': 'Nodo 2 (Réplica Principal)',
+  'chat-distribuido-1': 'Nodo 3 (Redundancia)',
+};
+const NODO_ROL = NOMBRES_NODOS[POD_NAME] || POD_NAME;
 
 // Estado: mapa socketId -> nombre
 const usuarios = new Map();
@@ -34,6 +42,9 @@ app.get('/health', (_req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     pod: POD_NAME,
+    id: POD_ID,
+    uid: POD_UID,
+    nodo: NODO_ROL,
     usuarios: usuarios.size,
     uptime: Math.floor(process.uptime())
   });
@@ -100,7 +111,9 @@ server.listen(PORT, HOST, () => {
   console.log(`║  Chat Distribuido HA — Servidor        ║`);
   console.log(`╠════════════════════════════════════════╣`);
   console.log(`║  Escuchando en: ${HOST}:${PORT}         `);
-  console.log(`║  Pod / Hostname: ${POD_NAME}           `);
+  console.log(`║  Pod: ${POD_NAME}                        `);
+  console.log(`║  ID:  ${POD_ID}                         `);
+  console.log(`║  Rol: ${NODO_ROL}                        `);
   console.log(`║  Directorio cliente: ${clientDir}      `);
   console.log(`╚════════════════════════════════════════╝`);
 });

@@ -16,8 +16,8 @@
 |         |           |         |    app: chat-distribuido  |
 +---------+-----------+         |             |             |
                                 |  +----------+----------+ |
-                                |  | Deployment          | |
-                                |  | replicas: 2         | |
+                                 |  | StatefulSet         | |
+                                 |  | replicas: 2         | |
                                 |  |                     | |
                                 |  | +-------+ +-------+ | |
                                 |  | | Pod 1 | | Pod 2 | | |

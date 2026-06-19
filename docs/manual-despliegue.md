@@ -163,7 +163,7 @@ oc port-forward -n chat-ha svc/chat-distribuido-svc 8080:80
 ### Namespace `chat-ha`
 Aísla todos los recursos del proyecto en su propio espacio de nombres.
 
-### Deployment
+### StatefulSet
 | Campo | Valor | Propósito |
 |-------|-------|-----------|
 | `replicas: 2` | 2 | Alta disponibilidad: siempre hay al menos 1 pod activo |
@@ -216,10 +216,10 @@ oc logs <nombre> -n chat-ha
 oc delete pod <nombre> -n chat-ha
 
 # Escalar réplicas
-oc scale deployment/chat-distribuido --replicas=3 -n chat-ha
+oc scale statefulset/chat-distribuido --replicas=3 -n chat-ha
 
 # Reiniciar todos los pods
-oc rollout restart deployment/chat-distribuido -n chat-ha
+oc delete pods -n chat-ha -l app=chat-distribuido
 
 # Eliminar todo el despliegue
 oc delete namespace chat-ha

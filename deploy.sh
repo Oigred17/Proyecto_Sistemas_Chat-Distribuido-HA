@@ -18,6 +18,16 @@ echo "      Chat Distribuido HA - Despliegue y Verificacion      "
 echo ""
 
 # ─────────────────────────────────────────────────────────────
+# Verificar que NO se ejecute como root
+# ─────────────────────────────────────────────────────────────
+if [ "$EUID" -eq 0 ]; then
+  echo "[ERROR] No ejecutes este script con sudo."
+  echo "        Ejecutalo como usuario normal: ./deploy.sh"
+  echo "        El script pedira sudo solo cuando sea necesario."
+  exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────
 # FASE 1: VERIFICACION DEL ENTORNO
 # ─────────────────────────────────────────────────────────────
 title "1/6 - Verificando herramientas"
@@ -33,17 +43,42 @@ command -v curl   >/dev/null 2>&1 && ok "curl instalado" || error "curl no encon
 title "2/6 - Verificando MicroShift"
 
 if ! oc cluster-info >/dev/null 2>&1; then
-  warn "Sin conexion. Configurando kubeconfig..."
+  warn "Sin conexion. Intentando iniciar MicroShift..."
   if command -v minc >/dev/null 2>&1; then
-    mkdir -p ~/.kube
-    KUBEADMIN=$(sudo find /var/lib/containers/storage -path "*/kubeadmin/*/kubeconfig" 2>/dev/null | head -1)
-    if [ -n "$KUBEADMIN" ]; then
-      sudo cat "$KUBEADMIN" > ~/.kube/config
-      chmod 600 ~/.kube/config
-      ok "kubeconfig configurado"
-    else
-      error "kubeconfig no encontrado. Ejecuta: sudo minc create"
+    STATUS=$(minc status 2>/dev/null | grep '"container"' | cut -d: -f2 | tr -d ' ",')
+    if [ "$STATUS" = "stopped" ] || [ -z "$STATUS" ]; then
+      info "MicroShift detenido. Creando/iniciando con minc..."
+      echo "  (se pedira sudo para ejecutar minc create)"
+      sudo minc create 2>&1 || error "Error al crear MicroShift con minc"
+      ok "MicroShift creado/iniciado"
     fi
+    info "Esperando que el API server responda..."
+    for i in $(seq 1 60); do
+      if oc cluster-info >/dev/null 2>&1; then
+        ok "API Server responde"
+        break
+      fi
+      if [ $((i % 6)) -eq 0 ]; then
+        info "  Esperando... ($((i * 5))s)"
+      fi
+      sleep 5
+    done
+    oc cluster-info >/dev/null 2>&1 || error "MicroShift no responde tras 5 minutos"
+    mkdir -p ~/.kube
+    info "Generando kubeconfig..."
+    if minc generate-kubeconfig > ~/.kube/config 2>/dev/null; then
+      ok "kubeconfig generado con minc"
+    else
+      info "Buscando kubeconfig alternativo..."
+      KUBEADMIN=$(sudo find /var/lib/containers/storage -path "*/kubeadmin/*/kubeconfig" 2>/dev/null | head -1)
+      if [ -n "$KUBEADMIN" ]; then
+        sudo cat "$KUBEADMIN" > ~/.kube/config
+        ok "kubeconfig copiado desde $KUBEADMIN"
+      else
+        error "No se pudo generar kubeconfig"
+      fi
+    fi
+    chmod 600 ~/.kube/config
   else
     error "MINC no instalado"
   fi
@@ -107,21 +142,27 @@ echo "Desplegar en MicroShift? (s/N)"
 read -r respuesta_k8s
 if [[ "$respuesta_k8s" =~ ^[Ss]$ ]]; then
 
+  # Eliminar StatefulSet anterior si existe
+  if oc get statefulset chat-distribuido -n "${NAMESPACE}" >/dev/null 2>&1; then
+    info "StatefulSet chat-distribuido ya existe. Se actualizará con 'oc apply'."
+  fi
+
   oc apply -f "${K8S_DIR}/deployment.yaml" || error "Error al aplicar manifiestos"
   ok "Manifiestos aplicados"
 
   info "Esperando pods listos..."
-  oc rollout status deployment/chat-distribuido -n "${NAMESPACE}" --timeout=120s || warn "Timeout"
+  oc rollout status statefulset/chat-distribuido -n "${NAMESPACE}" --timeout=120s || warn "Timeout"
 
   echo ""
   echo "--- PODS ---"
   oc get pods -n "${NAMESPACE}" -l app=chat-distribuido -o wide
 
   echo ""
-  echo "--- HEALTH CHECK DESDE CADA POD ---"
+  echo "--- HEALTH CHECK DESDE CADA NODO ---"
   for pod in $(oc get pods -n "${NAMESPACE}" -l app=chat-distribuido -o name | cut -d/ -f2); do
-    RESP=$(oc exec -n "${NAMESPACE}" "$pod" -- curl -s http://localhost:3000/health 2>/dev/null || echo "{\"error\":\"no response\"}")
-    echo "  ${pod}: ${RESP}"
+    RESP=$(oc exec -n "${NAMESPACE}" "$pod" -- wget -qO- http://127.0.0.1:3000/health 2>/dev/null || echo "{\"error\":\"no response\"}")
+    NODO=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('nodo','?'))" 2>/dev/null || echo "?")
+    echo "  ${pod} (${NODO}): ${RESP}"
   done
 
   echo ""
@@ -136,25 +177,44 @@ if [[ "$respuesta_k8s" =~ ^[Ss]$ ]]; then
   echo "============================================="
   ok "DESPLIEGUE EXITOSO"
   echo ""
+
+  # Detectar URL de la Route si existe
+  ROUTE_URL=""
+  if oc get route -n "${NAMESPACE}" chat-distribuido-route >/dev/null 2>&1; then
+    ROUTE_URL=$(oc get route -n "${NAMESPACE}" chat-distribuido-route -o jsonpath='http://{.spec.host}' 2>/dev/null || echo "")
+    if [ -n "$ROUTE_URL" ]; then
+      # minc expone rutas HTTP en el puerto 9080 del host
+      ROUTE_URL="${ROUTE_URL}:9080"
+    fi
+  fi
+
+  IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | grep -v 127.0.0.1 | head -1)
+
   echo "ACCEDER AL CHAT:"
   echo ""
-  echo "  Metodo 1 - Port-forward (RECOMENDADO):"
-  echo "    oc port-forward -n chat-ha svc/chat-distribuido-svc 8080:80"
-  echo "    http://localhost:8080"
+  if [ -n "$ROUTE_URL" ]; then
+    echo "  Metodo 1 - Route (RECOMENDADO - no requiere port-forward):"
+    echo "    ${ROUTE_URL}"
+    echo "    (Nota: si nip.io resuelve a 127.0.0.1, usa el metodo 2)"
+    echo ""
+    echo "  Metodo 2 - Port-forward (acceso red local):"
+  else
+    echo "  Metodo 1 - Port-forward (RECOMENDADO - acceso red local):"
+  fi
+  echo "    oc port-forward -n chat-ha svc/chat-distribuido-svc --address 0.0.0.0 8080:80"
+  echo "    http://${IP}:8080"
   echo ""
-  echo "  Metodo 2 - NodePort (acceso desde la red local):"
-  IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | grep -v 127.0.0.1 | head -1)
+  echo "  Alternativa - NodePort (solo si la red del contenedor lo permite):"
   echo "    http://${IP}:30080"
   echo ""
   echo "PRUEBA DE TOLERANCIA A FALLOS:"
   echo "  (abre el chat primero, luego en otra terminal ejecuta:)"
   echo ""
-  echo "  # 1 - Ver pods activos:"
-  echo "    oc get pods -n chat-ha -l app=chat-distribuido"
+  echo "  # 1 - Ver pods activos (Nodo 2 Principal, Nodo 3 Redundancia):"
+  echo "    oc get pods -n chat-ha -l app=chat-distribuido -o wide"
   echo ""
   echo "  # 2 - Eliminar UN pod mientras envias mensajes:"
-  POD_NAME=$(oc get pods -n "${NAMESPACE}" -l app=chat-distribuido -o name | head -1 | cut -d/ -f2)
-  echo "    oc delete pod -n chat-ha ${POD_NAME}"
+  echo "    oc delete pod -n chat-ha chat-distribuido-0"
   echo ""
   echo "  # 3 - Ver como MicroShift lo recrea automaticamente:"
   echo "    oc get pods -n chat-ha -l app=chat-distribuido -w"
@@ -163,21 +223,81 @@ if [[ "$respuesta_k8s" =~ ^[Ss]$ ]]; then
   echo "    El navegador mostrara 'Reconectando...' por ~1s y volvera solo"
   echo ""
   echo "PRUEBA DE BALANCEO DE CARGA:"
-  echo "  (verifica que el trafico se distribuye entre los 2 pods)"
+  echo "  (verifica que el trafico se distribuye entre los 2 nodos)"
   echo ""
   echo "  while true; do"
-  echo "    curl -s http://localhost:8080/health | python3 -c \"import sys,json; print(json.load(sys.stdin)['pod'])\""
+  echo "    curl -s http://localhost:8080/health | python3 -c \"import sys,json; print(json.load(sys.stdin)['nodo'])\""
   echo "    sleep 1"
   echo "  done"
   echo "============================================="
 
+  PF_SCRIPT="/tmp/chat-pf-loop.sh"
+  cat > "$PF_SCRIPT" << 'PFEOF'
+#!/usr/bin/env bash
+trap "exit 0" SIGTERM SIGINT
+NAMESPACE="$1"
+while true; do
+  oc port-forward -n "${NAMESPACE}" svc/chat-distribuido-svc --address 0.0.0.0 8080:80
+  sleep 2
+done
+PFEOF
+  chmod +x "$PF_SCRIPT"
+
   echo ""
-  echo "Iniciar port-forward ahora? (s/N)"
+  echo "Iniciar port-forward? (F)oreground | (B)ackground | (R)oute | (N)o"
   read -r pf
-  if [[ "$pf" =~ ^[Ss]$ ]]; then
-    info "Port-forward activo en http://localhost:8080 (Ctrl+C para detener)..."
-    oc port-forward -n "${NAMESPACE}" svc/chat-distribuido-svc 8080:80
-  fi
+  case "$pf" in
+    [Ff]*)
+      ;&
+    [Bb]*)
+      # Liberar puerto 8080 si otro proceso lo esta usando
+      PF_PID_OLD=$(cat /tmp/chat-pf.pid 2>/dev/null || echo "")
+      if [ -n "$PF_PID_OLD" ] && kill -0 "$PF_PID_OLD" 2>/dev/null; then
+        info "Cerrando port-forward anterior (PID $PF_PID_OLD)..."
+        kill -9 "$PF_PID_OLD" 2>/dev/null
+        sleep 1
+      fi
+      ;;
+  esac
+
+  case "$pf" in
+    [Ff]*)
+      info "Port-forward activo en http://${IP}:8080 (Ctrl+C para detener)..."
+      info "  (se auto-reinicia si el pod se elimina, aprox 2s de reconexion)"
+      "${PF_SCRIPT}" "${NAMESPACE}" "${IP}"
+      ;;
+    [Bb]*)
+      info "Port-forward en background (PID guardado en /tmp/chat-pf.pid)..."
+      nohup "${PF_SCRIPT}" "${NAMESPACE}" "${IP}" >/tmp/chat-pf.log 2>&1 &
+      PF_PID=$!
+      echo $PF_PID > /tmp/chat-pf.pid
+      ok "Port-forward corriendo en PID $PF_PID (se auto-reinicia si el pod falla)"
+      echo "  http://${IP}:8080"
+      echo "  Accesible desde cualquier PC en la red"
+      echo ""
+      echo "Probar tolerancia a fallos:"
+      echo "  1. Abre http://${IP}:8080 en el navegador"
+      echo "  2. Envia mensajes de chat"
+      echo "  3. En OTRA terminal: oc delete pod -n chat-ha chat-distribuido-0"
+      echo "  4. El port-forward se reinicia solo (~2s) y el chat se reconecta"
+      echo "  5. Ver el health check: curl -s http://${IP}:8080/health | python3 -m json.tool"
+      echo ""
+      echo "Para detenerlo:"
+      echo "  kill \$(cat /tmp/chat-pf.pid)"
+      ;;
+    [Rr]*)
+      if [ -n "$ROUTE_URL" ]; then
+        ok "Usando route: ${ROUTE_URL}"
+        echo "  (minc expone rutas HTTP en el puerto 9080)"
+      else
+        warn "No hay Route definida. Verifica con: oc get route -n ${NAMESPACE}"
+      fi
+      ;;
+    *)
+      info "Omitido. Usa el comando manualmente:"
+      info "  oc port-forward -n chat-ha svc/chat-distribuido-svc --address 0.0.0.0 8080:80"
+      ;;
+  esac
 fi
 
 echo ""; echo "            Proceso completado               "; echo ""

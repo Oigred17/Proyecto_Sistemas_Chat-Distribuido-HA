@@ -9,8 +9,6 @@
   <!-- Socket.io del mismo servidor (no CDN externo) para funcionar sin internet -->
   <script src="/socket.io/socket.io.js"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
     :root {
       --bg-base: #0a0f1e;
       --bg-card: #111827;
@@ -40,7 +38,7 @@
     }
 
     body {
-      font-family: 'Inter', system-ui, sans-serif;
+      font-family: system-ui, -apple-system, sans-serif;
       background: var(--bg-base);
       color: var(--text-primary);
       display: flex;
@@ -592,6 +590,7 @@
 
     // ── Socket.io con reconexión automática ───────────
     const socket = io({
+      transports: ['websocket'],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
@@ -648,7 +647,7 @@
       fetch('/health')
         .then(r => r.json())
         .then(d => {
-          podInfo.textContent = ` Servidor: ${d.pod}  |  Usuarios: ${d.usuarios}`;
+          podInfo.textContent = ` ${d.pod}#${d.id}  |  ${d.nodo}  |  Usuarios: ${d.usuarios}`;
           podTimestamp.textContent = new Date(d.timestamp).toLocaleTimeString('es-MX');
         })
         .catch(() => {
