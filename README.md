@@ -1,110 +1,24 @@
-# Proyecto Ordinario — Sistemas Distribuidos y Alta Disponibilidad
+# OpenShift Clients
 
-## Resumen del Proyecto
+The OpenShift client `oc` simplifies working with Kubernetes and OpenShift
+clusters, offering a number of advantages over `kubectl` such as easy login,
+kube config file management, and access to developer tools. The `kubectl`
+binary is included alongside for when strict Kubernetes compliance is necessary.
 
-**Sistema:** Chat distribuido en tiempo real con tolerancia a fallos  
-**Tecnologías:** Node.js · Express · Socket.io · Podman · Kubernetes (MicroShift)  
-**Arquitectura:** Cliente-Servidor distribuido con múltiples réplicas
+To learn more about OpenShift, visit [docs.openshift.com](https://docs.openshift.com)
+and select the version of OpenShift you are using.
 
----
+## Installing the tools
 
-## Estado del Proyecto
+After extracting this archive, move the `oc` and `kubectl` binaries
+to a location on your PATH such as `/usr/local/bin`. Then run:
 
-| Componente | Archivo |
-|-----------|---------|--------|
-| Cliente Web | `client/index.html` |
-| Servidor Node.js | `server/server.js` |
-| Dockerfile | `server/Dockerfile` |
-| Manifiestos K8s | `k8s/deployment.yaml` |
-| Script despliegue | `deploy.sh` |
-| Manual despliegue | `docs/manual-despliegue.md` |
-| Guía instalación | `docs/instalacion.md` |
-| Diagramas | `docs/diagramas.md` |
+    oc login [API_URL]
 
----
+to start a session against an OpenShift cluster. After login, run `oc` and
+`oc help` to learn more about how to get started with OpenShift.
 
-## Cómo Ejecutar
+## License
 
-### Desarrollo Local (más rápido para demostrar)
-```bash
-cd ~/Documentos/Proyecto_Sistemas
-node server/server.js
-# Abrir: http://localhost:3000
-```
-
-### Con Podman (contenedor)
-```bash
-cd ~/Documentos/Proyecto_Sistemas
-podman build -t chat-distribuido:latest -f server/Dockerfile .
-podman run -p 3000:3000 chat-distribuido:latest
-```
-
-### Con MicroShift (Kubernetes)
-```bash
-./deploy.sh
-# O manualmente:
-oc apply -f k8s/deployment.yaml
-oc port-forward -n chat-ha svc/chat-distribuido-svc 8080:80
-```
-
----
-
-## Características Implementadas
-
-### Funcionales
-- [x] Chat en tiempo real con WebSockets (Socket.io)
-- [x] Múltiples usuarios simultáneos
-- [x] Lista de usuarios en línea en tiempo real
-- [x] Notificaciones de conexión/desconexión
-- [x] **Reconexión automática** del cliente (tolera caídas del pod)
-- [x] Endpoint `/health` para health checks de Kubernetes
-
-### Alta Disponibilidad
-- [x] 2 réplicas en Kubernetes (siempre hay 1 disponible)
-- [x] `livenessProbe`: reinicia pods que no responden
-- [x] `readinessProbe`: solo recibe tráfico cuando está listo
-- [x] `startupProbe`: da tiempo extra al arranque inicial
-- [x] `RollingUpdate` con `maxUnavailable=0` (sin downtime en updates)
-- [x] `podAntiAffinity`: distribuir pods en nodos distintos
-
-### Operacionales
-- [x] Namespace dedicado (`chat-ha`) para aislamiento
-- [x] Route de OpenShift para acceso HTTP
-- [x] Límites de recursos (CPU/RAM)
-- [x] Script automatizado `deploy.sh`
-
----
-
-## Arquitectura
-
-```
-Internet / LAN
-     │
-     ▼
-┌─────────────────────────────────────────────┐
-│          MicroShift Cluster                 │
-│                                             │
-│  ┌──────────────────────────────────────┐   │
-│  │  Namespace: chat-ha                  │   │
-│  │                                      │   │
-│  │  Route ──► Service (NodePort:30080)  │   │
-│  │              │                       │   │
-│  │      ┌───────┴───────┐               │   │
-│  │      ▼               ▼               │   │
-│  │  ┌────────┐     ┌────────┐           │   │
-│  │  │ Pod 1  │     │ Pod 2  │           │   │
-│  │  │ :3000  │     │ :3000  │           │   │
-│  │  │Node.js │     │Node.js │           │   │
-│  │  └────────┘     └────────┘           │   │
-│  │                                      │   │
-│  └──────────────────────────────────────┘   │
-└─────────────────────────────────────────────┘
-     ▲
-     │ WebSocket (Socket.io)
-     │
-┌────────────────┐
-│ Cliente Web    │
-│ (Navegador)    │
-│ index.html     │
-└────────────────┘
-```
+OpenShift is licensed under the Apache Public License 2.0. The source code for this
+program is [located on github](https://github.com/openshift/origin).
