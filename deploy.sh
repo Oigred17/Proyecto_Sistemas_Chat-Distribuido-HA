@@ -190,114 +190,42 @@ if [[ "$respuesta_k8s" =~ ^[Ss]$ ]]; then
 
   IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | grep -v 127.0.0.1 | head -1)
 
-  echo "ACCEDER AL CHAT:"
-  echo ""
-  if [ -n "$ROUTE_URL" ]; then
-    echo "  Metodo 1 - Route (RECOMENDADO - no requiere port-forward):"
-    echo "    ${ROUTE_URL}"
-    echo "    (Nota: si nip.io resuelve a 127.0.0.1, usa el metodo 2)"
+  echo "ACCEDER AL CHAT (Recomendado - tolerancia a fallos nativa):"
+  ROUTE_HOST=$(oc get route -n "${NAMESPACE}" chat-distribuido-route -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
+  if [ -n "$ROUTE_HOST" ]; then
+    echo "  http://${ROUTE_HOST}:9080"
     echo ""
-    echo "  Metodo 2 - Port-forward (acceso red local):"
-  else
-    echo "  Metodo 1 - Port-forward (RECOMENDADO - acceso red local):"
+    echo "  (El router de MicroShift balancea entre los 2 pods automaticamente."
+    echo "   Al eliminar un pod, el trafico se redirige al otro SIN INTERRUPCION.)"
   fi
-  echo "    oc port-forward -n chat-ha svc/chat-distribuido-svc --address 0.0.0.0 8080:80"
-  echo "    http://${IP}:8080"
   echo ""
-  echo "  Alternativa - NodePort (solo si la red del contenedor lo permite):"
-  echo "    http://${IP}:30080"
+  echo "Alternativa - Port-forward (requiere reconexion manual):"
+  echo "  oc port-forward -n chat-ha svc/chat-distribuido-svc 8080:80"
+  echo "  http://localhost:8080"
   echo ""
-  echo "PRUEBA DE TOLERANCIA A FALLOS:"
-  echo "  (abre el chat primero, luego en otra terminal ejecuta:)"
+  echo "============================================="
+  echo "PRUEBA DE TOLERANCIA A FALLOS (por Route):"
+  echo "  1. Abre http://${ROUTE_HOST}:9080 en el navegador"
+  echo "  2. Envia mensajes de chat"
+  echo "  3. En OTRA terminal:"
+  echo "     oc delete pod -n chat-ha chat-distribuido-0"
+  echo "  4. El chat SIGUE FUNCIONANDO (el router redirige al otro pod)"
+  echo "  5. MicroShift recrea el pod automaticamente:"
+  echo "     oc get pods -n chat-ha -l app=chat-distribuido -w"
   echo ""
-  echo "  # 1 - Ver pods activos (Nodo 2 Principal, Nodo 3 Redundancia):"
-  echo "    oc get pods -n chat-ha -l app=chat-distribuido -o wide"
-  echo ""
-  echo "  # 2 - Eliminar UN pod mientras envias mensajes:"
-  echo "    oc delete pod -n chat-ha chat-distribuido-0"
-  echo ""
-  echo "  # 3 - Ver como MicroShift lo recrea automaticamente:"
-  echo "    oc get pods -n chat-ha -l app=chat-distribuido -w"
-  echo ""
-  echo "  # 4 - Verificar que el chat se reconecta solo:"
-  echo "    El navegador mostrara 'Reconectando...' por ~1s y volvera solo"
-  echo ""
-  echo "PRUEBA DE BALANCEO DE CARGA:"
-  echo "  (verifica que el trafico se distribuye entre los 2 nodos)"
-  echo ""
-  echo "  while true; do"
-  echo "    curl -s http://localhost:8080/health | python3 -c \"import sys,json; print(json.load(sys.stdin)['nodo'])\""
-  echo "    sleep 1"
-  echo "  done"
+  echo "Verificar el ID unico del pod:"
+  echo "  curl -s http://${ROUTE_HOST}:9080/health | python3 -m json.tool"
+  echo "  (El campo 'id' cambia cuando el pod se recrea)"
   echo "============================================="
 
-  PF_SCRIPT="/tmp/chat-pf-loop.sh"
-  cat > "$PF_SCRIPT" << 'PFEOF'
-#!/usr/bin/env bash
-trap "exit 0" SIGTERM SIGINT
-NAMESPACE="$1"
-while true; do
-  oc port-forward -n "${NAMESPACE}" svc/chat-distribuido-svc --address 0.0.0.0 8080:80
-  sleep 2
-done
-PFEOF
-  chmod +x "$PF_SCRIPT"
-
   echo ""
-  echo "Iniciar port-forward? (F)oreground | (B)ackground | (R)oute | (N)o"
+  echo "Iniciar port-forward auxiliar? (s/N)"
+  echo "  (Recomendado: usa la Route en http://${ROUTE_HOST}:9080)"
   read -r pf
-  case "$pf" in
-    [Ff]*)
-      ;&
-    [Bb]*)
-      # Liberar puerto 8080 si otro proceso lo esta usando
-      PF_PID_OLD=$(cat /tmp/chat-pf.pid 2>/dev/null || echo "")
-      if [ -n "$PF_PID_OLD" ] && kill -0 "$PF_PID_OLD" 2>/dev/null; then
-        info "Cerrando port-forward anterior (PID $PF_PID_OLD)..."
-        kill -9 "$PF_PID_OLD" 2>/dev/null
-        sleep 1
-      fi
-      ;;
-  esac
-
-  case "$pf" in
-    [Ff]*)
-      info "Port-forward activo en http://${IP}:8080 (Ctrl+C para detener)..."
-      info "  (se auto-reinicia si el pod se elimina, aprox 2s de reconexion)"
-      "${PF_SCRIPT}" "${NAMESPACE}" "${IP}"
-      ;;
-    [Bb]*)
-      info "Port-forward en background (PID guardado en /tmp/chat-pf.pid)..."
-      nohup "${PF_SCRIPT}" "${NAMESPACE}" "${IP}" >/tmp/chat-pf.log 2>&1 &
-      PF_PID=$!
-      echo $PF_PID > /tmp/chat-pf.pid
-      ok "Port-forward corriendo en PID $PF_PID (se auto-reinicia si el pod falla)"
-      echo "  http://${IP}:8080"
-      echo "  Accesible desde cualquier PC en la red"
-      echo ""
-      echo "Probar tolerancia a fallos:"
-      echo "  1. Abre http://${IP}:8080 en el navegador"
-      echo "  2. Envia mensajes de chat"
-      echo "  3. En OTRA terminal: oc delete pod -n chat-ha chat-distribuido-0"
-      echo "  4. El port-forward se reinicia solo (~2s) y el chat se reconecta"
-      echo "  5. Ver el health check: curl -s http://${IP}:8080/health | python3 -m json.tool"
-      echo ""
-      echo "Para detenerlo:"
-      echo "  kill \$(cat /tmp/chat-pf.pid)"
-      ;;
-    [Rr]*)
-      if [ -n "$ROUTE_URL" ]; then
-        ok "Usando route: ${ROUTE_URL}"
-        echo "  (minc expone rutas HTTP en el puerto 9080)"
-      else
-        warn "No hay Route definida. Verifica con: oc get route -n ${NAMESPACE}"
-      fi
-      ;;
-    *)
-      info "Omitido. Usa el comando manualmente:"
-      info "  oc port-forward -n chat-ha svc/chat-distribuido-svc --address 0.0.0.0 8080:80"
-      ;;
-  esac
+  if [[ "$pf" =~ ^[Ss]$ ]]; then
+    info "Port-forward en http://localhost:8080 (Ctrl+C para detener)..."
+    oc port-forward -n "${NAMESPACE}" svc/chat-distribuido-svc 8080:80
+  fi
 fi
 
 echo ""; echo "            Proceso completado               "; echo ""
