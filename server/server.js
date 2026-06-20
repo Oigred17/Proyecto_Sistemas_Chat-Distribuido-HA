@@ -16,6 +16,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const POD_NAME = process.env.HOSTNAME || 'localhost';
 const POD_UID = process.env.POD_UID || 'unknown';
 const POD_ID = (POD_UID && POD_UID !== 'unknown') ? POD_UID.substring(0, 8) : POD_NAME.split('-').pop();
+const REDIS_URL = process.env.REDIS_URL;
 
 const NOMBRES_NODOS = {
   'chat-distribuido-0': 'Nodo 2 (Réplica Principal)',
@@ -23,8 +24,47 @@ const NOMBRES_NODOS = {
 };
 const NODO_ROL = NOMBRES_NODOS[POD_NAME] || POD_NAME;
 
-// Estado: mapa socketId -> nombre
+// ── Redis adapter (comparte estado entre pods) ──────────────
+const { Redis } = require('ioredis');
+const { createAdapter } = require('@socket.io/redis-adapter');
+const USERS_KEY = 'chat:users';
+let pubClient, subClient, redisState;
+
+if (REDIS_URL) {
+  pubClient = new Redis(REDIS_URL);
+  subClient = new Redis(REDIS_URL);
+  redisState = new Redis(REDIS_URL);
+  io.adapter(createAdapter(pubClient, subClient));
+  pubClient.on('connect', () => console.log(`[Redis] Conectado a ${REDIS_URL}`));
+  pubClient.on('error', (err) => console.error(`[Redis] Error: ${err.message}`));
+}
+
+// Estado local (fallback sin Redis / caché local con Redis)
 const usuarios = new Map();
+
+async function uniqueUsers(vals) {
+  return [...new Set(vals)];
+}
+
+async function getGlobalUsers() {
+  if (!redisState) return Array.from(usuarios.values());
+  return uniqueUsers(await redisState.hvals(USERS_KEY));
+}
+
+async function addGlobalUser(socketId, username) {
+  usuarios.set(socketId, username);
+  if (!redisState) return Array.from(usuarios.values());
+  await redisState.hset(USERS_KEY, socketId, username);
+  return uniqueUsers(await redisState.hvals(USERS_KEY));
+}
+
+async function removeGlobalUser(socketId) {
+  const nombre = usuarios.get(socketId);
+  usuarios.delete(socketId);
+  if (!redisState) return [Array.from(usuarios.values()), nombre];
+  await redisState.hdel(USERS_KEY, socketId);
+  return [uniqueUsers(await redisState.hvals(USERS_KEY)), nombre];
+}
 
 // ── Servir cliente estático ──────────────────────────────────
 // En Docker, el cliente estará en /app/client/
@@ -60,24 +100,21 @@ io.on('connection', (socket) => {
   console.log(`[+] Cliente conectado: ${socket.id}`);
 
   // Registrar usuario con nombre
-  socket.on('registrar', (nombre) => {
+  socket.on('registrar', async (nombre) => {
     if (typeof nombre !== 'string' || !nombre.trim()) return;
     const nombreSanitizado = nombre.trim().slice(0, 20);
 
-    // Si ya estaba registrado (reconexión), actualizar nombre
-    const nombreAnterior = usuarios.get(socket.id);
-    usuarios.set(socket.id, nombreSanitizado);
+    const oldLocal = usuarios.get(socket.id);
+    const allUsers = await addGlobalUser(socket.id, nombreSanitizado);
 
-    if (!nombreAnterior) {
-      // Primera conexión: anunciar al resto
+    if (!oldLocal) {
       socket.broadcast.emit('mensaje-sistema', `${nombreSanitizado} se ha conectado`);
     } else {
       console.log(`[*] ${socket.id} re-registrado como ${nombreSanitizado}`);
     }
 
-    // Enviar lista actualizada a todos
-    io.emit('usuarios-activos', Array.from(usuarios.values()));
-    console.log(`[*] Usuario registrado: ${nombreSanitizado} | Total: ${usuarios.size}`);
+    io.emit('usuarios-activos', allUsers);
+    console.log(`[*] Usuario registrado: ${nombreSanitizado} | Total: ${allUsers.length}`);
   });
 
   // Reenviar mensaje a todos (broadcast)
@@ -94,13 +131,13 @@ io.on('connection', (socket) => {
   });
 
   // Desconexión
-  socket.on('disconnect', (reason) => {
+  socket.on('disconnect', async (reason) => {
     const nombre = usuarios.get(socket.id);
     if (nombre) {
-      usuarios.delete(socket.id);
+      const [allUsers] = await removeGlobalUser(socket.id);
       socket.broadcast.emit('mensaje-sistema', `${nombre} se ha desconectado`);
-      io.emit('usuarios-activos', Array.from(usuarios.values()));
-      console.log(`[-] ${nombre} desconectado (${reason}) | Quedan: ${usuarios.size}`);
+      io.emit('usuarios-activos', allUsers);
+      console.log(`[-] ${nombre} desconectado (${reason}) | Quedan: ${allUsers.length}`);
     }
   });
 });

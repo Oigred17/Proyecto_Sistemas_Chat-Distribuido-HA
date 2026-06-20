@@ -6,8 +6,10 @@
 #    1. Namespace        — Aislamiento del proyecto
 #    2. StatefulSet      — 2 pods con nombres estables (chat-distribuido-0, chat-distribuido-1)
 #                         → Nodo 2 (Réplica Principal), Nodo 3 (Redundancia)
-#    3. Service          — Balanceo de carga interno
+#    3. Service          — Balanceo de carga interno (chat)
 #    4. Route (opcional) — Exposición externa en MicroShift/OpenShift
+#    5. Redis Deployment — Backend compartido de estado (tolerancia a fallos)
+#    6. Redis Service    — Acceso interno a Redis
 # ═══════════════════════════════════════════════════════════════
 
 ---
@@ -94,6 +96,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
+        - name: REDIS_URL
+          value: "redis://redis.chat-ha.svc.cluster.local:6379"
 
         # ── Probes de Kubernetes ──────────────────────
         livenessProbe:
@@ -173,3 +177,59 @@ spec:
   #   termination: edge
   #   insecureEdgeTerminationPolicy: Redirect
   wildcardPolicy: None
+
+---
+# ── 5. REDIS DEPLOYMENT ────────────────────────────────────────
+# Redis actúa como backend compartido para Socket.io:
+#   - Sincroniza los mensajes entre los 2 pods (pub/sub)
+#   - Comparte la lista de usuarios activos (hash)
+#   - Permite tolerancia a fallos: si un pod se elimina,
+#     el otro mantiene el estado completo
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: chat-ha
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: docker.io/redis:7-alpine
+        ports:
+        - containerPort: 6379
+          protocol: TCP
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "10m"
+          limits:
+            memory: "128Mi"
+            cpu: "50m"
+
+---
+# ── 6. REDIS SERVICE ───────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: chat-ha
+  labels:
+    app: redis
+spec:
+  selector:
+    app: redis
+  ports:
+  - name: redis
+    protocol: TCP
+    port: 6379
+    targetPort: 6379
