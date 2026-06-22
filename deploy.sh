@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 IMAGE_NAME="chat-distribuido"
 IMAGE_TAG="latest"
+FULL_IMAGE="localhost/${IMAGE_NAME}:${IMAGE_TAG}"
 NAMESPACE="chat-ha"
-K8S_DIR="k8s"
+K8S_DIR="${SCRIPT_DIR}/k8s"
+MANIFEST="${K8S_DIR}/deployment.yaml"
 
+# ── Colores ──────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
 ok()    { echo -e "${GREEN}[ OK ]${NC} $1"; }
@@ -17,148 +22,272 @@ echo ""
 echo "      Chat Distribuido HA - Despliegue y Verificacion      "
 echo ""
 
-# ─────────────────────────────────────────────────────────────
-# Verificar que NO se ejecute como root
-# ─────────────────────────────────────────────────────────────
+# ── No ejecutar como root ─────────────────────────────────
 if [ "$EUID" -eq 0 ]; then
   echo "[ERROR] No ejecutes este script con sudo."
   echo "        Ejecutalo como usuario normal: ./deploy.sh"
-  echo "        El script pedira sudo solo cuando sea necesario."
   exit 1
 fi
 
-# ─────────────────────────────────────────────────────────────
-# FASE 1: VERIFICACION DEL ENTORNO
-# ─────────────────────────────────────────────────────────────
+# ── Validar sudo al inicio ────────────────────────────────
+title "Validando acceso sudo"
+sudo -v 2>/dev/null || { echo "  Se necesita sudo para continuar."; sudo -v; }
+ok "Acceso sudo confirmado"
+
+# ── Detectar herramientas ─────────────────────────────────
 title "1/6 - Verificando herramientas"
 
-command -v podman >/dev/null 2>&1 && ok "Podman: $(podman --version)" || error "Podman no encontrado"
-command -v oc     >/dev/null 2>&1 && ok "oc: $(oc version --client 2>/dev/null | head -1)" || error "oc no encontrado"
-command -v minc   >/dev/null 2>&1 && ok "minc instalado" || warn "minc no instalado"
-command -v curl   >/dev/null 2>&1 && ok "curl instalado" || error "curl no encontrado"
+PODMAN=""; DOCKER=""; RUNTIME=""
+command -v podman >/dev/null 2>&1 && PODMAN=$(command -v podman) && RUNTIME="$PODMAN"
+if [ -z "$RUNTIME" ]; then
+  command -v docker >/dev/null 2>&1 && DOCKER=$(command -v docker) && RUNTIME="$DOCKER"
+fi
+if [ -n "$RUNTIME" ]; then
+  ok "$(basename "$RUNTIME"): $($RUNTIME --version 2>/dev/null | head -1)"
+else
+  error "No se encontro podman ni docker"
+fi
 
-# ─────────────────────────────────────────────────────────────
-# FASE 2: VERIFICACION MICROSHIFT
-# ─────────────────────────────────────────────────────────────
+command -v oc >/dev/null 2>&1 && ok "oc: $(oc version --client 2>/dev/null | head -1)" || error "oc no encontrado"
+
+# Buscar minc en varios lugares
+MINC=""
+for candidate in "$SCRIPT_DIR/minc" "./minc" "/usr/local/bin/minc" "/usr/bin/minc" "minc"; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    MINC=$(command -v "$candidate")
+    break
+  elif [ -f "$candidate" ] && [ -x "$candidate" ]; then
+    MINC="$candidate"
+    break
+  fi
+done
+
+if [ -n "$MINC" ]; then
+  ok "minc: $($MINC version 2>/dev/null || echo disponible)"
+else
+  warn "minc no instalado — la creacion de MicroShift debe hacerse manualmente"
+  MINC=""
+fi
+
+command -v curl >/dev/null 2>&1 && ok "curl instalado" || warn "curl no instalado (prueba local no disponible)"
+
+# ── Verificar / iniciar MicroShift ────────────────────────
 title "2/6 - Verificando MicroShift"
 
-if ! oc cluster-info >/dev/null 2>&1; then
-  warn "Sin conexion. Intentando iniciar MicroShift..."
-  if command -v minc >/dev/null 2>&1; then
-    STATUS=$(minc status 2>/dev/null | grep '"container"' | cut -d: -f2 | tr -d ' ",')
-    if [ "$STATUS" = "stopped" ] || [ -z "$STATUS" ]; then
-      info "MicroShift detenido. Creando/iniciando con minc..."
-      echo "  (se pedira sudo para ejecutar minc create)"
-      sudo minc create 2>&1 || error "Error al crear MicroShift con minc"
-      ok "MicroShift creado/iniciado"
-    fi
-    info "Esperando que el API server responda..."
-    for i in $(seq 1 60); do
-      if oc cluster-info >/dev/null 2>&1; then
-        ok "API Server responde"
-        break
-      fi
-      if [ $((i % 6)) -eq 0 ]; then
-        info "  Esperando... ($((i * 5))s)"
-      fi
-      sleep 5
-    done
-    oc cluster-info >/dev/null 2>&1 || error "MicroShift no responde tras 5 minutos"
-    mkdir -p ~/.kube
-    info "Generando kubeconfig..."
-    if minc generate-kubeconfig > ~/.kube/config 2>/dev/null; then
-      ok "kubeconfig generado con minc"
-    else
-      info "Buscando kubeconfig alternativo..."
-      KUBEADMIN=$(sudo find /var/lib/containers/storage -path "*/kubeadmin/*/kubeconfig" 2>/dev/null | head -1)
-      if [ -n "$KUBEADMIN" ]; then
-        sudo cat "$KUBEADMIN" > ~/.kube/config
-        ok "kubeconfig copiado desde $KUBEADMIN"
-      else
-        error "No se pudo generar kubeconfig"
-      fi
-    fi
-    chmod 600 ~/.kube/config
-  else
-    error "MINC no instalado"
+if oc cluster-info >/dev/null 2>&1; then
+  ok "API Server conectado"
+else
+  warn "MicroShift no responde"
+  if [ -z "$MINC" ]; then
+    error "No hay MINC disponible para iniciar MicroShift"
   fi
+
+  MICROSHIFT_CONTAINER=$(sudo "${RUNTIME}" ps -a --filter name=microshift --format '{{.Names}} {{.Status}}' 2>/dev/null || echo "")
+
+  if echo "$MICROSHIFT_CONTAINER" | grep -qi "microshift.*Up"; then
+    info "MicroShift container: RUNNING (solo falta kubeconfig)"
+  elif echo "$MICROSHIFT_CONTAINER" | grep -qi "microshift.*Exited"; then
+    echo ""
+    info "MicroShift container: DETENIDO"
+    printf "  Iniciarlo con ${RUNTIME}? (s/N): "
+    read -r
+    if [[ "$REPLY" =~ ^[Ss]$ ]]; then
+      sudo "${RUNTIME}" start microshift || error "Error al iniciar contenedor microshift"
+      ok "MicroShift iniciado"
+    fi
+  else
+    echo ""
+    echo "  Se ejecutara: sudo ${MINC} create"
+    echo "  (descarga ~1-2 GB, puede tardar 5-10 min la primera vez)"
+    echo ""
+    printf "  Presiona ENTER para continuar o Ctrl+C para cancelar... "
+    read -r
+    echo ""
+    info "Ejecutando: sudo ${MINC} create"
+    sudo "$MINC" create || error "Error al crear MicroShift con minc"
+    ok "MicroShift creado"
+  fi
+
+  info "Esperando API server (hasta 5 min)..."
+  for i in $(seq 1 60); do
+    if oc cluster-info >/dev/null 2>&1; then
+      ok "API Server responde"
+      break
+    fi
+    if [ $((i % 6)) -eq 0 ]; then
+      info "  Esperando... ($((i * 5))s)"
+    fi
+    sleep 5
+  done
+  oc cluster-info >/dev/null 2>&1 || error "MicroShift no responde tras 5 minutos"
+
+  # ── Configurar kubeconfig ────────────────────────────────
+  mkdir -p ~/.kube
+  info "Configurando kubeconfig..."
+
+  if [ -n "$MINC" ]; then
+    sudo "$MINC" generate-kubeconfig 2>/dev/null || true
+  fi
+
+  KUBECONFIG_COPIADA=""
+  for src in \
+    "/root/.kube/config" \
+    "/var/lib/microshift/resources/kubeadmin/kubeconfig" \
+    "/var/lib/containers/storage/volumes/*/kubeconfig"; do
+    if sudo test -f "$src" 2>/dev/null; then
+      sudo cat "$src" > ~/.kube/config 2>/dev/null && KUBECONFIG_COPIADA="$src" && break
+    fi
+  done
+
+  if [ -z "$KUBECONFIG_COPIADA" ]; then
+    warn "No se encontro kubeconfig. Buscando con find..."
+    FOUND=$(sudo find /var/lib /root -name kubeconfig -not -path "*/proc/*" 2>/dev/null | head -1)
+    if [ -n "$FOUND" ]; then
+      sudo cat "$FOUND" > ~/.kube/config && KUBECONFIG_COPIADA="$FOUND"
+    fi
+  fi
+
+  if [ -n "$KUBECONFIG_COPIADA" ]; then
+    ok "kubeconfig copiado desde ${KUBECONFIG_COPIADA}"
+  else
+    error "No se pudo obtener el kubeconfig"
+  fi
+  chmod 600 ~/.kube/config
 fi
 
 oc cluster-info >/dev/null 2>&1 || error "MicroShift no responde"
 ok "API Server conectado"
 
 NODOS=$(oc get nodes --no-headers 2>/dev/null | wc -l)
-ok "Nodos disponibles: ${NODOS}"
+ok "Nodos: ${NODOS}"
 oc get nodes
 
-# ─────────────────────────────────────────────────────────────
-# FASE 3: CONSTRUIR IMAGEN
-# ─────────────────────────────────────────────────────────────
+# ── Obtener IPs del host ───────────────────────────────────
+HOST_IPS=()
+while IFS= read -r line; do
+  HOST_IPS+=("$line")
+done < <(ip -4 addr show | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | grep -v 127.0.0.1 || true)
+
+# ── Exponer MicroShift a la red ────────────────────────────
+MICROSHIFT_BIND=$(sudo "${RUNTIME}" inspect microshift --format '{{.NetworkSettings.Ports}}' 2>/dev/null || echo "")
+
+if echo "$MICROSHIFT_BIND" | grep -q "127.0.0.1" && [ ${#HOST_IPS[@]} -gt 0 ]; then
+  echo ""
+  warn "MicroShift solo escucha en 127.0.0.1"
+  echo "  Tus IPs de red: ${HOST_IPS[*]}"
+  echo "
+  La Route (puerto 9080) tiene tolerancia a fallos NATIVA
+  (el router de MicroShift redirige al pod vivo).
+  El port-forward NO tiene tolerancia (muere si el pod cae).
+  "
+  echo "Opciones para exponer la Route a la red:"
+  echo "  1) iptables DNAT (recomendado — tolerancia a fallos)"
+  echo "  2) socat (simple, efimero)"
+  echo "  3) Omitir (solo localhost)"
+  echo ""
+  printf "Elige (1/2/3) [3]: "
+  read -r net_opt
+
+  if [[ "$net_opt" == "1" ]]; then
+    info "Configurando iptables DNAT para exponer Route en 0.0.0.0:9080..."
+    sudo sysctl -w net.ipv4.conf.all.route_localnet=1 >/dev/null 2>&1 || true
+    sudo iptables -t nat -C PREROUTING -p tcp --dport 9080 -j DNAT --to-destination 127.0.0.1:9080 2>/dev/null ||
+      sudo iptables -t nat -A PREROUTING -p tcp --dport 9080 -j DNAT --to-destination 127.0.0.1:9080 || true
+    sudo iptables -t nat -C OUTPUT -p tcp --dport 9080 -j DNAT --to-destination 127.0.0.1:9080 2>/dev/null ||
+      sudo iptables -t nat -A OUTPUT -p tcp --dport 9080 -j DNAT --to-destination 127.0.0.1:9080 || true
+    ok "Route expuesta en http://${HOST_IPS[0]}:9080"
+  elif [[ "$net_opt" == "2" ]] && command -v socat >/dev/null 2>&1; then
+    PORT_9080_FREE=true
+    (sudo "${RUNTIME}" port microshift 2>/dev/null | grep -q "0.0.0.0:9080") && PORT_9080_FREE=false
+    if $PORT_9080_FREE; then
+      info "Iniciando socat en 0.0.0.0:9080 -> 127.0.0.1:9080"
+      nohup sudo socat TCP-LISTEN:9080,fork,reuseaddr TCP:127.0.0.1:9080 >/dev/null 2>&1 &
+      SOCAT_PID=$!
+      ok "socat (PID ${SOCAT_PID}) — http://${HOST_IPS[0]}:9080"
+    else
+      warn "Puerto 9080 ocupado en 0.0.0.0. Usando iptables..."
+      sudo sysctl -w net.ipv4.conf.all.route_localnet=1 >/dev/null 2>&1 || true
+      sudo iptables -t nat -A PREROUTING -p tcp --dport 9080 -j DNAT --to-destination 127.0.0.1:9080 2>/dev/null || true
+      ok "Route expuesta con iptables — http://${HOST_IPS[0]}:9080"
+    fi
+  elif [[ "$net_opt" == "2" ]] && ! command -v socat >/dev/null 2>&1; then
+    warn "socat no instalado. Usando iptables..."
+    sudo sysctl -w net.ipv4.conf.all.route_localnet=1 >/dev/null 2>&1 || true
+    sudo iptables -t nat -A PREROUTING -p tcp --dport 9080 -j DNAT --to-destination 127.0.0.1:9080 2>/dev/null || true
+    ok "Route expuesta con iptables — http://${HOST_IPS[0]}:9080"
+  else
+    info "MicroShift solo accesible desde localhost"
+  fi
+fi
+
+# ── Construir imagen ──────────────────────────────────────
 title "3/6 - Construyendo imagen"
 
-podman build -t "${IMAGE_NAME}:${IMAGE_TAG}" -f server/Dockerfile . || error "Error al construir"
-ok "Imagen construida: ${IMAGE_NAME}:${IMAGE_TAG}"
+"${RUNTIME}" build -t "${FULL_IMAGE}" -f server/Dockerfile "${SCRIPT_DIR}" || error "Error al construir"
+ok "Imagen: ${FULL_IMAGE}"
 
-# ─────────────────────────────────────────────────────────────
-# FASE 4: CARGAR IMAGEN EN MICROSHIFT
-# ─────────────────────────────────────────────────────────────
+# ── Cargar imagen en MicroShift ───────────────────────────
 title "4/6 - Cargando imagen en MicroShift"
 
-podman save "${IMAGE_NAME}:${IMAGE_TAG}" | sudo ctr images import - || error "Error al cargar"
-ok "Imagen cargada en el daemon de MicroShift"
+TMP_IMAGE=$(mktemp /tmp/chat-distribuido-image-XXXXXX.tar)
+cleanup() { rm -f "${TMP_IMAGE}"; }
+trap cleanup EXIT
 
-# ─────────────────────────────────────────────────────────────
-# FASE 5: PRUEBA LOCAL (OPCIONAL)
-# ─────────────────────────────────────────────────────────────
+"${RUNTIME}" save "${FULL_IMAGE}" -o "${TMP_IMAGE}" || error "Error al exportar imagen"
+
+if command -v ctr >/dev/null 2>&1; then
+  sudo ctr -n k8s.io images import "${TMP_IMAGE}" && ok "Imagen cargada en containerd (k8s.io)" && CLEAN=1
+elif command -v crictl >/dev/null 2>&1; then
+  sudo crictl load "${TMP_IMAGE}" && ok "Imagen cargada via crictl" && CLEAN=1
+fi
+
+if [ "${CLEAN:-0}" -eq 0 ]; then
+  warn "ctr/crictl no disponibles. Copiando imagen al storage de MicroShift..."
+  sudo mkdir -p /var/lib/microshift/images 2>/dev/null || true
+  sudo cp "${TMP_IMAGE}" /var/lib/microshift/images/ || error "No se pudo cargar la imagen"
+  ok "Imagen copiada a /var/lib/microshift/images/"
+fi
+
+rm -f "${TMP_IMAGE}"
+trap - EXIT
+
+# ── Prueba local opcional ─────────────────────────────────
 title "5/6 - Prueba local (opcional)"
-
-echo "Probar servidor localmente antes de desplegar? (s/N)"
+echo "Probar localmente antes de desplegar? (s/N)"
 read -r respuesta
 if [[ "$respuesta" =~ ^[Ss]$ ]]; then
   info "Iniciando contenedor de prueba..."
-  podman run -d --name chat-test -p 8080:3000 "${IMAGE_NAME}:${IMAGE_TAG}"
+  "${RUNTIME}" run -d --name chat-test -p 8080:3000 "${FULL_IMAGE}"
   sleep 2
-
   echo ""
-  echo "--- Health Check ---"
   curl -s http://localhost:8080/health | python3 -m json.tool 2>/dev/null || curl -s http://localhost:8080/health
   echo ""
-  echo "--- Endpoint raiz ---"
-  curl -sI http://localhost:8080/ | head -5
-  echo ""
-  echo "Abre http://localhost:8080 en el navegador para probar."
   echo "Presiona ENTER para detener y continuar..."
   read -r
-  podman stop chat-test && podman rm chat-test
+  "${RUNTIME}" stop chat-test && "${RUNTIME}" rm chat-test
   ok "Prueba local finalizada"
 fi
 
-# ─────────────────────────────────────────────────────────────
-# FASE 6: DESPLEGAR EN MICROSHIFT
-# ─────────────────────────────────────────────────────────────
+# ── Desplegar en MicroShift ───────────────────────────────
 title "6/6 - Despliegue en MicroShift"
-
 echo "Desplegar en MicroShift? (s/N)"
 read -r respuesta_k8s
 if [[ "$respuesta_k8s" =~ ^[Ss]$ ]]; then
-
-  # Eliminar StatefulSet anterior si existe
-  if oc get statefulset chat-distribuido -n "${NAMESPACE}" >/dev/null 2>&1; then
-    info "StatefulSet chat-distribuido ya existe. Se actualizará con 'oc apply'."
+  if [ ! -f "$MANIFEST" ]; then
+    error "Manifiesto no encontrado: ${MANIFEST}"
   fi
-
-  oc apply -f "${K8S_DIR}/deployment.yaml" || error "Error al aplicar manifiestos"
+  oc apply -f "${MANIFEST}" || error "Error al aplicar manifiestos"
   ok "Manifiestos aplicados"
 
   info "Esperando pods listos..."
-  oc rollout status statefulset/chat-distribuido -n "${NAMESPACE}" --timeout=120s || warn "Timeout"
+  oc rollout status statefulset/chat-distribuido -n "${NAMESPACE}" --timeout=120s || warn "Timeout en rollout"
 
   echo ""
   echo "--- PODS ---"
   oc get pods -n "${NAMESPACE}" -l app=chat-distribuido -o wide
 
   echo ""
-  echo "--- HEALTH CHECK DESDE CADA NODO ---"
+  echo "--- HEALTH CHECK ---"
   for pod in $(oc get pods -n "${NAMESPACE}" -l app=chat-distribuido -o name | cut -d/ -f2); do
     RESP=$(oc exec -n "${NAMESPACE}" "$pod" -- wget -qO- http://127.0.0.1:3000/health 2>/dev/null || echo "{\"error\":\"no response\"}")
     NODO=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('nodo','?'))" 2>/dev/null || echo "?")
@@ -174,57 +303,45 @@ if [[ "$respuesta_k8s" =~ ^[Ss]$ ]]; then
   oc get route -n "${NAMESPACE}" 2>/dev/null || echo "  No hay Route definida"
 
   echo ""
-  echo "============================================="
   ok "DESPLIEGUE EXITOSO"
   echo ""
 
-  # Detectar URL de la Route si existe
-  ROUTE_URL=""
-  if oc get route -n "${NAMESPACE}" chat-distribuido-route >/dev/null 2>&1; then
-    ROUTE_URL=$(oc get route -n "${NAMESPACE}" chat-distribuido-route -o jsonpath='http://{.spec.host}' 2>/dev/null || echo "")
-    if [ -n "$ROUTE_URL" ]; then
-      # minc expone rutas HTTP en el puerto 9080 del host
-      ROUTE_URL="${ROUTE_URL}:9080"
-    fi
-  fi
-
-  IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | grep -v 127.0.0.1 | head -1)
-
-  echo "ACCEDER AL CHAT (Recomendado - tolerancia a fallos nativa):"
   ROUTE_HOST=$(oc get route -n "${NAMESPACE}" chat-distribuido-route -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
-  if [ -n "$ROUTE_HOST" ]; then
-    echo "  http://${ROUTE_HOST}:9080"
-    echo ""
-    echo "  (El router de MicroShift balancea entre los 2 pods automaticamente."
-    echo "   Al eliminar un pod, el trafico se redirige al otro SIN INTERRUPCION.)"
-  fi
-  echo ""
-  echo "Alternativa - Port-forward (requiere reconexion manual):"
-  echo "  oc port-forward -n chat-ha svc/chat-distribuido-svc 8080:80"
-  echo "  http://localhost:8080"
-  echo ""
-  echo "============================================="
-  echo "PRUEBA DE TOLERANCIA A FALLOS (por Route):"
-  echo "  1. Abre http://${ROUTE_HOST}:9080 en el navegador"
-  echo "  2. Envia mensajes de chat"
-  echo "  3. En OTRA terminal:"
-  echo "     oc delete pod -n chat-ha chat-distribuido-0"
-  echo "  4. El chat SIGUE FUNCIONANDO (el router redirige al otro pod)"
-  echo "  5. MicroShift recrea el pod automaticamente:"
-  echo "     oc get pods -n chat-ha -l app=chat-distribuido -w"
-  echo ""
-  echo "Verificar el ID unico del pod:"
-  echo "  curl -s http://${ROUTE_HOST}:9080/health | python3 -m json.tool"
-  echo "  (El campo 'id' cambia cuando el pod se recrea)"
-  echo "============================================="
 
+  echo "ACCEDER AL CHAT:"
+  echo "  Route (local):  http://127.0.0.1:9080  (tolerancia a fallos SI)"
+  if [ -n "$ROUTE_HOST" ]; then
+    for ip in "${HOST_IPS[@]}"; do
+      echo "  Route (red):    http://${ip}:9080"
+    done
+  fi
+  echo "  Port-forward:   http://localhost:8080 (tolerancia a fallos NO)"
   echo ""
-  echo "Iniciar port-forward auxiliar? (s/N)"
-  echo "  (Recomendado: usa la Route en http://${ROUTE_HOST}:9080)"
+  echo "  PRUEBA DE TOLERANCIA A FALLOS:"
+  echo "  1. Abre http://127.0.0.1:9080 en el navegador"
+  echo "  2. Envia mensajes"
+  echo "  3. En otra terminal: oc delete pod -n ${NAMESPACE} chat-distribuido-0"
+  echo "  4. El chat se reconecta al otro pod SIN INTERRUPCION"
+  echo ""
+
+  echo "Iniciar port-forward? (s/N)"
   read -r pf
   if [[ "$pf" =~ ^[Ss]$ ]]; then
-    info "Port-forward en http://localhost:8080 (Ctrl+C para detener)..."
-    oc port-forward -n "${NAMESPACE}" svc/chat-distribuido-svc 8080:80
+    PF_ADDR="localhost"
+    echo "  Ser visible en la red? (s/N)"
+    read -r pf_net
+    [[ "$pf_net" =~ ^[Ss]$ ]] && PF_ADDR="0.0.0.0"
+
+    PF_PORT=8080
+    while [ "$PF_PORT" -lt 8100 ]; do
+      if ! (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -q ":${PF_PORT} "; then
+        break
+      fi
+      PF_PORT=$((PF_PORT + 1))
+    done
+
+    info "Port-forward en http://${PF_ADDR}:${PF_PORT} (Ctrl+C para detener)..."
+    oc port-forward --address "${PF_ADDR}" -n "${NAMESPACE}" svc/chat-distribuido-svc "${PF_PORT}":80 || warn "Falló port-forward en puerto ${PF_PORT}"
   fi
 fi
 
